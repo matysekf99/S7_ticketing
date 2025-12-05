@@ -22,15 +22,21 @@ contract NftTicket is ERC721 {
         uint256 concertId;
         uint256 price;
         bool used;
+        bool isRedeemable;
+        bytes32 redeemCodeHash; 
     }
     
     mapping(uint256 => TicketInfo) public ticketInfos;
+
+    mapping(uint256 => bool) public ticketExists;
+
+    mapping(uint256 => bool) public ticketRedeemed;
     
     constructor(string memory name, string memory symbol, address _ticketingContract) ERC721(name, symbol) {
         ticketingContract = _ticketingContract;
     }
 
-    function mintTicket(address to, uint256 concertId, uint256 price) public {
+    function mintTicket(address to, uint256 concertId, uint256 price) public returns (uint256){
         require(msg.sender == ticketingContract, "Only ticketing contract can mint");
 
         uint256 tokenId = _nextTokenId;
@@ -39,14 +45,20 @@ contract NftTicket is ERC721 {
         ticketInfos[tokenId] = TicketInfo({
             concertId: concertId,
             price: price,
-            used: false
+            used: false,
+            isRedeemable: false,
+            redeemCodeHash: bytes32(0) 
         });
+
+        ticketExists[tokenId] = true;
         _nextTokenId++;
+        return tokenId;
     }
 
-    function useTicket(uint256 tokenId) public {
-        require(ownerOf(tokenId)==msg.sender,"Not the owner");
-        require(!ticketInfos[tokenId].used,"Ticket already used");
+    function useTicket(uint256 tokenId, address user) public {
+        require(msg.sender == ticketingContract, "Only ticketing contract can use");
+        require(ownerOf(tokenId) == user, "Not the owner");
+        require(!ticketInfos[tokenId].used, "Ticket already used");
 
         ITicketing.Concert memory concert = ITicketing(ticketingContract).concerts_list(ticketInfos[tokenId].concertId);
         uint256 concertDate = concert.date;
@@ -54,7 +66,42 @@ contract NftTicket is ERC721 {
         require(block.timestamp >= concertDate - 24 hours, "Too early");
         require(block.timestamp < concertDate, "Concert already passed");
 
-
         ticketInfos[tokenId].used = true;
+    }
+
+
+    function createRedeemableTicket(uint256 concertId, string memory redeemCode) public returns (uint256) {
+        require(msg.sender == ticketingContract, "Only ticketing contract can mint");
+        
+        uint256 tokenId = _nextTokenId;
+        
+        ticketInfos[tokenId] = TicketInfo({
+            concertId: concertId,
+            price: 0,
+            used: false,
+            isRedeemable: true,
+            redeemCodeHash: keccak256(abi.encodePacked(redeemCode))
+        });
+        ticketExists[tokenId] = true;
+        _nextTokenId++;
+        return tokenId;
+    }
+
+
+    function redeemTicket(uint256 tokenId, string memory redeemCode, address redeemer) public {
+        require(msg.sender == ticketingContract, "Only ticketing contract can redeem");
+        require(ticketExists[tokenId], "Ticket does not exist");
+        
+        TicketInfo storage ticket = ticketInfos[tokenId];
+        require(ticket.isRedeemable, "Ticket is not redeemable");
+        require(!ticketRedeemed[tokenId], "Ticket already redeemed");
+        
+        require(
+            keccak256(abi.encodePacked(redeemCode)) == ticket.redeemCodeHash,
+            "Invalid redeem code"
+        );
+        
+        ticketRedeemed[tokenId] = true;
+        _mint(redeemer, tokenId);
     }
 }
